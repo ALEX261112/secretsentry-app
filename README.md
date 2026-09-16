@@ -13,7 +13,8 @@ secretsentry-app/
 │   ├── index.js
 │   ├── package.json
 │   └── .env.example
-├── android/               ← projet Android généré par Capacitor
+├── android/               ← projet Android généré par Capacitor (icônes + splash déjà intégrés)
+├── assets/                ← sources de l'icône/splash (icon.png, icon-foreground.png, ...)
 ├── capacitor.config.json
 ├── render.yaml            ← déploiement en un clic du backend sur Render
 └── package.json
@@ -87,49 +88,73 @@ Avant de builder en prod, mets à jour l'URL du backend : dans
 `www/index.html`, remplace `http://localhost:8787` par l'URL de ton backend
 déployé (`window.SECRETSENTRY_API_BASE`), puis relance `npx cap sync android`.
 
-**Icône et splash screen** : le projet a les icônes par défaut de Capacitor.
-Remplace-les avec [`@capacitor/assets`](https://github.com/ionic-team/capacitor-assets)
-en partant d'un logo 1024×1024 (garde le thème brass/marine de la démo, ou
-le tien).
+**Icône et splash screen** : déjà générés et intégrés (toutes les densités
+Android + mode sombre) à partir des sources dans `assets/` — thème marine/laiton
+assorti à la démo. Pour changer de design, remplace `assets/icon.png`,
+`assets/icon-foreground.png`, `assets/icon-background.png` et `assets/splash.png`,
+puis relance `npx capacitor-assets generate --android`.
 
-## 4. Déployer le backend en production (Render, gratuit)
+## 4. Déployer le backend en production — et la question de la carte bancaire
 
-J'ai préparé un `render.yaml` à la racine du projet — Render le lit tout
-seul, il ne reste que la partie que je ne peux pas faire à ta place (créer
-le compte). Étapes :
+**Tant que tu es en phase de validation, tu n'as besoin d'aucun compte
+d'hébergement ni d'aucune carte bancaire.** Le mode local (section 1) suffit
+pour tester, faire des démos, montrer le produit à des gens. Ne saute à
+cette section que quand tu es prêt à avoir une URL publique en permanence.
 
-1. **Pousse ce dossier sur un repo GitHub** (public ou privé, les deux
-   marchent) :
-   ```bash
-   git init
-   git add .
-   git commit -m "SecretSentry"
-   # crée un repo vide sur github.com, puis :
-   git remote add origin https://github.com/<toi>/secretsentry-app.git
-   git push -u origin main
-   ```
-2. Va sur [dashboard.render.com](https://dashboard.render.com) et crée un
-   compte (2 min, gratuit — c'est la seule étape qui doit venir de toi)
-3. **New → Blueprint**, connecte ton repo GitHub — Render détecte
-   automatiquement `render.yaml` et propose de créer le service
-   `secretsentry-api`
-4. Render va te demander la valeur de `GITHUB_TOKEN` (celui que tu as créé à
-   l'étape 1, section précédente) — colle-la dans son dashboard, jamais
-   ailleurs
-5. Déploie. Récupère l'URL publique (ex.
-   `https://secretsentry-api.onrender.com`)
-6. Mets cette URL dans `www/index.html` (`SECRETSENTRY_API_BASE`), relance
-   `npx cap sync android` avant de builder l'appli
+Ce dossier a déjà un repo Git local avec un premier commit (`git log` te le
+montre) — il ne reste qu'à le pousser toi-même, avec ton propre compte :
 
-Note plan gratuit Render : le service s'endort après 15 min d'inactivité et
-met ~30s à se réveiller au premier appel suivant — largement suffisant pour
-valider le concept, à upgrader plus tard si le produit prend.
+```bash
+# crée un repo vide sur github.com (bouton "New repository"), puis :
+cd secretsentry-app
+git remote add origin https://github.com/<toi>/secretsentry-app.git
+git push -u origin main
+```
 
-Railway et Fly.io fonctionnent aussi très bien si tu préfères — la même
-logique s'applique, juste sans blueprint automatique (`server/` comme racine
-du service, mêmes variables d'environnement).
+Je ne touche jamais à tes identifiants — ça reste ta session GitHub, sur ta
+machine.
 
-## 5. Publier sur le Google Play Store
+Pour l'hébergement, sois vigilant : **certains hébergeurs "gratuits"
+(Render inclus) demandent quand même une carte bancaire pour vérifier
+l'identité**, même sur le plan gratuit — c'est inconsistant et ça a changé
+plusieurs fois ces dernières années. Aucune carte n'est débitée sur un plan
+gratuit, mais si l'idée de la renseigner te bloque, tu as deux options sans
+carte :
+- **Rester en local plus longtemps** (le plus simple, zéro friction)
+- **Un PC toujours allumé** (le tien, ou un Raspberry Pi) exposé via un
+  tunnel gratuit comme [ngrok](https://ngrok.com) ou
+  [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) —
+  aucune carte, aucun compte cloud payant
+
+Si tu choisis quand même un hébergeur cloud, `render.yaml` est prêt à
+l'emploi (Render lit la config tout seul via "New → Blueprint") ; Railway et
+Fly.io fonctionnent pareil, juste sans blueprint automatique.
+
+## 5. Comment tu reçois l'argent des abonnements
+
+**Recevoir de l'argent ne demande jamais de carte bancaire** — une carte
+sert à *payer*, pas à *être payé*. Pour encaisser des abonnements (via ta
+web app, en dehors du Play Store — voir la section légale ci-dessous), le
+chemin standard est **Stripe** :
+
+1. Crée un compte sur [dashboard.stripe.com/register](https://dashboard.stripe.com/register)
+   — gratuit, aucune carte demandée à l'inscription
+2. Stripe te demande de "activer les paiements" : une pièce d'identité, ton
+   **IBAN/RIB** (pas une carte — c'est là que l'argent arrive), et un
+   **numéro SIRET** puisque tu factures à titre professionnel
+3. Le SIRET vient du statut auto-entrepreneur — inscription gratuite sur
+   [autoentrepreneur.urssaf.fr](https://www.autoentrepreneur.urssaf.fr),
+   tu reçois ton SIRET sous quelques jours
+4. Une fois activé, Stripe prélève sa commission (environ 1,5% + 0,25€ par
+   transaction en France) et vire le reste sur ton compte bancaire
+   automatiquement (tous les jours ou toutes les semaines, réglable)
+
+Je ne suis pas conseiller financier, donc pour les détails fiscaux exacts
+(régime auto-entrepreneur, seuils de TVA, etc.) une vérification auprès de
+l'URSSAF ou d'un comptable reste utile — mais côté mécanique technique,
+c'est bien : ID + IBAN + SIRET, jamais de carte.
+
+## 6. Publier sur le Google Play Store
 
 Ça, c'est la partie que tu dois faire toi-même (compte + paiement) :
 
@@ -159,7 +184,7 @@ réalistes :
 - Intégrer Google Play Billing directement dans l'appli si tu veux vendre
   depuis le Store
 
-## 6. Avant de te lancer pour de vrai
+## 7. Avant de te lancer pour de vrai
 
 - Statut : en France, il te faut un statut (auto-entrepreneur suffit pour
   démarrer) pour facturer légalement des abonnements
