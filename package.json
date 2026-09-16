@@ -1,0 +1,18 @@
+{
+  "name": "secretsentry-app",
+  "version": "1.0.0",
+  "description": "SecretSentry — appli Android (via Capacitor) qui emballe la web app de suivi de rotation de secrets.",
+  "private": true,
+  "scripts": {
+    "sync": "cap sync",
+    "open:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/core": "^6.2.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^6.2.0"
+  }
+}

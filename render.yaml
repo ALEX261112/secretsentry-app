@@ -1,0 +1,18 @@
+# Blueprint Render — déploiement en un clic du backend SecretSentry.
+# Sur https://dashboard.render.com : New > Blueprint > connecte ce repo Git.
+# Render lit ce fichier tout seul et propose de créer le service ci-dessous.
+services:
+  - type: web
+    name: secretsentry-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: GITHUB_TOKEN
+        sync: false          # tu le saisis toi-même dans le dashboard Render, jamais dans le repo
+      - key: ALLOWED_ORIGIN
+        value: "*"            # à resserrer sur l'URL de ta web app une fois en prod
+    # PORT est fourni automatiquement par Render — inutile de le fixer ici,
+    # server/index.js lit déjà process.env.PORT.
