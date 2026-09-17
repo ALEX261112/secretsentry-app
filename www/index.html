@@ -263,6 +263,22 @@
   .plan li{display:flex;gap:8px;color:var(--text);}
   .plan li::before{content:"✓";color:var(--good);font-weight:700;}
   .plan .btn{margin-top:auto;justify-content:center;}
+  .plan.featured{animation:featuredGlow 4s ease-in-out infinite;}
+  @keyframes featuredGlow{
+    0%,100%{box-shadow:0 0 0 1px var(--accent);}
+    50%{box-shadow:0 0 0 1px var(--accent), 0 0 28px -6px color-mix(in srgb, var(--accent) 55%, transparent);}
+  }
+  @media (prefers-reduced-motion: reduce){ .plan.featured{animation:none;} }
+
+  .sound-toggle{font-size:12px;padding:8px 12px;}
+  .sound-toggle.on{color:var(--accent);border-color:var(--accent);}
+
+  @keyframes rowPop{
+    0%{background:color-mix(in srgb, var(--accent) 22%, transparent);}
+    100%{background:transparent;}
+  }
+  tr.row-new{animation:rowPop 1.1s ease-out;}
+  @media (prefers-reduced-motion: reduce){ tr.row-new{animation:none;} }
 
   /* ---- how it works ---- */
   .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
@@ -479,6 +495,7 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
       <div class="scan-row">
         <button class="btn" id="scanBtn">Scanner les fuites publiques (démo)</button>
         <span style="font-size:12.5px;color:var(--text-dim);" id="scanStatus"></span>
+        <button class="btn sound-toggle" id="soundToggle" type="button" title="Activer un léger retour sonore sur les actions">🔈 Sons</button>
       </div>
       <div class="scan-result" id="scanResult"></div>
 
@@ -628,6 +645,38 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
 
   var secrets = [];
   var currentUser = null;
+  var lastAddedId = null;
+
+  // ---- optional, user-toggled sound feedback (Web Audio, no external file) ----
+  var soundOn = false;
+  var audioCtx = null;
+  function ensureAudioCtx(){
+    if(!audioCtx && (window.AudioContext || window.webkitAudioContext)){
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    return audioCtx;
+  }
+  function playTone(freq, duration){
+    if(!soundOn) return;
+    var ctx = ensureAudioCtx();
+    if(!ctx) return;
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.05, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + duration);
+  }
+  function playSuccess(){
+    playTone(660, 0.12);
+    setTimeout(function(){ playTone(880, 0.14); }, 90);
+  }
+  function playClick(){ playTone(440, 0.06); }
 
   function statusFor(s){
     var last = new Date(s.last + "T00:00:00");
@@ -650,6 +699,7 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
     secrets.forEach(function(s){
       var st = statusFor(s);
       var tr = document.createElement("tr");
+      if(lastAddedId && s.id === lastAddedId) tr.className = "row-new";
       tr.innerHTML =
         '<td class="mono">' + escapeHtml(s.name) + '</td>' +
         '<td><span class="svc"><span class="chip">' + escapeHtml(s.service) + '</span></span></td>' +
@@ -663,6 +713,7 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
         removeSecret(btn.getAttribute("data-id"));
       });
     });
+    lastAddedId = null; // one-shot: the "row-new" class was already applied above for this pass
   }
 
   function escapeHtml(str){
@@ -695,12 +746,18 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
         last_rotated: entry.last
       }).select().single().then(function(res){
         if(res.error){ console.error(res.error); return; }
-        secrets.push(rowToSecret(res.data));
+        var row = rowToSecret(res.data);
+        secrets.push(row);
+        lastAddedId = row.id;
+        playSuccess();
         render();
       });
     } else {
-      secrets.push({id:"s" + Date.now(), name:entry.name, service:entry.service, freq:entry.freq, last:entry.last});
+      var newRow = {id:"s" + Date.now(), name:entry.name, service:entry.service, freq:entry.freq, last:entry.last};
+      secrets.push(newRow);
+      lastAddedId = newRow.id;
       saveLocal(secrets);
+      playSuccess();
       render();
     }
   }
@@ -775,14 +832,26 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
     }).then(function(data){
       scanStatus.textContent = "Dernier scan : à l'instant (backend réel)";
       renderLiveScan(data);
+      playSuccess();
       scanBtn.disabled = false;
     }).catch(function(){
       clearTimeout(timeout);
       scanStatus.textContent = "Dernier scan : à l'instant (démo — backend indisponible)";
       renderDemoScan();
+      playSuccess();
       scanBtn.disabled = false;
     });
   });
+
+  var soundToggle = document.getElementById("soundToggle");
+  if(soundToggle){
+    soundToggle.addEventListener("click", function(){
+      soundOn = !soundOn;
+      soundToggle.classList.toggle("on", soundOn);
+      soundToggle.textContent = soundOn ? "🔊 Sons" : "🔈 Sons";
+      if(soundOn){ ensureAudioCtx(); playClick(); }
+    });
+  }
 
   var priceEls = document.querySelectorAll(".price-val");
   document.querySelectorAll(".pricing-toggle button").forEach(function(btn){
