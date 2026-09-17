@@ -140,6 +140,18 @@
     100%{transform:translate3d(2%,3%,0) scale(1.06);}
   }
 
+  .hero-3d{
+    position:absolute;top:-60px;right:-70px;width:480px;height:480px;z-index:-1;
+    pointer-events:none;opacity:0.9;
+  }
+  .hero-3d canvas{width:100%;height:100%;display:block;}
+  @media (max-width:820px){
+    .hero-3d{width:280px;height:280px;top:-10px;right:-50px;opacity:0.55;}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .hero-3d{display:none;}
+  }
+
   .terminal-stage{perspective:1200px;}
   .terminal{
     background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
@@ -352,6 +364,7 @@
 
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script type="text/javascript">
 (function(c,l,a,r,i,t,y){
 c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
@@ -402,6 +415,7 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
       </div>
     </div>
     <div class="hero-glow" aria-hidden="true"></div>
+    <div class="hero-3d" id="hero3d" aria-hidden="true"></div>
     <div class="terminal-stage">
     <div class="terminal" id="heroTerminal">
       <div class="bar"><span></span><span></span><span></span></div>
@@ -1015,6 +1029,85 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
       heroTerminal.style.transform = "rotateX(0deg) rotateY(0deg)";
     });
   }
+
+  // ---- animated 3D hero visual (Three.js) — un vrai bouclier en fil de fer
+  // qui tourne en continu, entouré de particules, derrière le terminal ----
+  (function initHero3D(){
+    var mount = document.getElementById("hero3d");
+    if(!mount || !window.THREE) return; // pas de THREE (CDN indisponible) -> pas de 3D, rien ne casse
+    if(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    var accent = 0xe3ab4c;
+    var good = 0x4fcf8f;
+
+    var scene = new THREE.Scene();
+    var camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+    camera.position.set(0, 0, 7);
+
+    var renderer;
+    try{
+      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    }catch(e){ return; } // WebGL indisponible sur cet appareil -> on abandonne proprement
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    mount.appendChild(renderer.domElement);
+
+    // Bouclier extérieur en fil de fer (représente la protection des secrets)
+    var coreGeo = new THREE.IcosahedronGeometry(2.1, 1);
+    var coreMat = new THREE.MeshBasicMaterial({ color: accent, wireframe: true, transparent: true, opacity: 0.55 });
+    var core = new THREE.Mesh(coreGeo, coreMat);
+    scene.add(core);
+
+    // Noyau intérieur, rotation inverse, pour un effet de profondeur
+    var innerGeo = new THREE.IcosahedronGeometry(1.25, 0);
+    var innerMat = new THREE.MeshBasicMaterial({ color: good, wireframe: true, transparent: true, opacity: 0.4 });
+    var inner = new THREE.Mesh(innerGeo, innerMat);
+    scene.add(inner);
+
+    // Particules flottantes en orbite (les "clés" surveillées)
+    var COUNT = 60;
+    var positions = new Float32Array(COUNT * 3);
+    for(var i = 0; i < COUNT; i++){
+      var r = 3.2 + Math.random() * 1.4;
+      var theta = Math.random() * Math.PI * 2;
+      var phi = Math.acos((Math.random() * 2) - 1);
+      positions[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      positions[i * 3 + 2] = r * Math.cos(phi);
+    }
+    var particleGeo = new THREE.BufferGeometry();
+    particleGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    var particleMat = new THREE.PointsMaterial({ color: accent, size: 0.05, transparent: true, opacity: 0.8 });
+    var particles = new THREE.Points(particleGeo, particleMat);
+    scene.add(particles);
+
+    function resize(){
+      var w = mount.clientWidth || 1;
+      var h = mount.clientHeight || 1;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    // Pause l'animation quand l'onglet est en arrière-plan (batterie/CPU)
+    var running = true;
+    document.addEventListener("visibilitychange", function(){
+      running = document.visibilityState === "visible";
+    });
+
+    function animate(){
+      requestAnimationFrame(animate);
+      if(!running) return;
+      core.rotation.x += 0.0018;
+      core.rotation.y += 0.0026;
+      inner.rotation.x -= 0.0022;
+      inner.rotation.y -= 0.0014;
+      particles.rotation.y += 0.0009;
+      renderer.render(scene, camera);
+    }
+    animate();
+  })();
 
   // ---- FAQ accordion ----
   document.querySelectorAll(".faq-q").forEach(function(btn){
