@@ -293,6 +293,34 @@
   .faq-item.open .faq-a{max-height:220px;}
   .faq-a p{padding:0 4px 16px;font-size:13.5px;}
 
+  /* ---- auth modal ---- */
+  .modal-backdrop{
+    position:fixed;inset:0;background:rgba(10,14,20,0.55);backdrop-filter:blur(3px);
+    display:none;align-items:center;justify-content:center;z-index:50;padding:16px;
+  }
+  .modal-backdrop.open{display:flex;}
+  .modal{
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    padding:26px 24px;max-width:380px;width:100%;position:relative;box-shadow:0 30px 70px -30px rgba(0,0,0,0.5);
+  }
+  .modal h3{font-size:17px;}
+  .modal-close{
+    position:absolute;top:14px;right:14px;background:none;border:none;color:var(--text-dim);
+    font-size:20px;line-height:1;cursor:pointer;
+  }
+  .modal-close:hover{color:var(--text);}
+  .auth-input{
+    flex:1;min-width:180px;padding:9px 10px;border-radius:7px;border:1px solid var(--border);
+    background:var(--surface-2);color:var(--text);font-family:var(--sans);font-size:13.5px;
+  }
+  .user-badge{
+    display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-dim);
+  }
+  .plan-badge{
+    font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:99px;
+    background:var(--accent-soft);color:var(--accent);text-transform:uppercase;letter-spacing:0.04em;
+  }
+
   footer{
     border-top:1px solid var(--border);margin-top:40px;padding-block:26px 40px;
     display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--text-dim);
@@ -307,6 +335,7 @@
 </style>
 
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script type="text/javascript">
 (function(c,l,a,r,i,t,y){
 c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
@@ -325,9 +354,24 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
       <a href="#demo">Démo</a>
       <a href="#tarifs">Tarifs</a>
     </nav>
-    <a class="btn primary" href="#demo">Essayer la démo</a>
+    <div id="navAuthArea">
+      <button class="btn primary" id="navAuthBtn" type="button">Se connecter</button>
+    </div>
   </div>
 </header>
+
+<div class="modal-backdrop" id="authBackdrop">
+  <div class="modal">
+    <button class="modal-close" id="authClose" type="button" aria-label="Fermer">&times;</button>
+    <h3>Connexion à SecretSentry</h3>
+    <p style="font-size:13.5px;margin-top:8px;">Reçois un lien de connexion par e-mail — pas de mot de passe à retenir.</p>
+    <form id="authForm" style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">
+      <input type="email" id="authEmail" class="auth-input" placeholder="toi@exemple.com" required>
+      <button type="submit" class="btn primary">Envoyer le lien</button>
+    </form>
+    <p id="authStatus" style="margin-top:10px;font-size:12.5px;color:var(--text-dim);"></p>
+  </div>
+</div>
 
 <div class="wrap">
 
@@ -397,7 +441,8 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
     </div>
 
     <div class="panel">
-      <span class="demo-flag">● prototype fonctionnel</span>
+      <span class="demo-flag" id="modeFlag">● mode démo — connecte-toi pour sauvegarder pour de vrai</span>
+      <span class="plan-badge" id="planBadge" style="display:none;margin-left:8px;"></span>
 
       <form class="add-form" id="addForm">
         <div class="field">
@@ -538,6 +583,14 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
   // Android, en définissant window.SECRETSENTRY_API_BASE = "https://api.tondomaine.com" dans un tag de script séparé, chargé avant celui-ci).
   var API_BASE = window.SECRETSENTRY_API_BASE || "https://secretsentry-app.onrender.com";
 
+  // Clé publique Supabase — protégée par les règles RLS côté base de données,
+  // sans risque à exposer côté client (même principe qu'une clé Stripe publique).
+  var SUPABASE_URL = "https://uiwthowqbrpiyioqnwrm.supabase.co";
+  var SUPABASE_ANON_KEY = "sb_publishable_1m88DYXzIShAhcMUqgIoow_dCE78ZgV";
+  var sbClient = (window.supabase && window.supabase.createClient)
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    : null;
+
   var STORAGE_KEY = "secretsentry_secrets_v1";
 
   var seed = [
@@ -553,7 +606,7 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
     return d.toISOString().slice(0,10);
   }
 
-  function load(){
+  function loadLocal(){
     try{
       var raw = localStorage.getItem(STORAGE_KEY);
       if(raw){
@@ -564,12 +617,17 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
     return seed.slice();
   }
 
-  function save(list){
+  function saveLocal(list){
     try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); }
     catch(e){ /* per-viewer convenience only — ignore failures */ }
   }
 
-  var secrets = load();
+  function rowToSecret(row){
+    return {id: row.id, name: row.name, service: row.service, freq: row.rotation_days, last: row.last_rotated};
+  }
+
+  var secrets = [];
+  var currentUser = null;
 
   function statusFor(s){
     var last = new Date(s.last + "T00:00:00");
@@ -602,9 +660,7 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
     });
     body.querySelectorAll(".row-del").forEach(function(btn){
       btn.addEventListener("click", function(){
-        secrets = secrets.filter(function(s){ return s.id !== btn.getAttribute("data-id"); });
-        save(secrets);
-        render();
+        removeSecret(btn.getAttribute("data-id"));
       });
     });
   }
@@ -615,6 +671,40 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
     });
   }
 
+  function removeSecret(id){
+    if(currentUser && sbClient){
+      sbClient.from("secrets").delete().eq("id", id).then(function(res){
+        if(res.error){ console.error(res.error); return; }
+        secrets = secrets.filter(function(s){ return s.id !== id; });
+        render();
+      });
+    } else {
+      secrets = secrets.filter(function(s){ return s.id !== id; });
+      saveLocal(secrets);
+      render();
+    }
+  }
+
+  function addSecret(entry){
+    if(currentUser && sbClient){
+      sbClient.from("secrets").insert({
+        user_id: currentUser.id,
+        name: entry.name,
+        service: entry.service,
+        rotation_days: entry.freq,
+        last_rotated: entry.last
+      }).select().single().then(function(res){
+        if(res.error){ console.error(res.error); return; }
+        secrets.push(rowToSecret(res.data));
+        render();
+      });
+    } else {
+      secrets.push({id:"s" + Date.now(), name:entry.name, service:entry.service, freq:entry.freq, last:entry.last});
+      saveLocal(secrets);
+      render();
+    }
+  }
+
   document.getElementById("addForm").addEventListener("submit", function(e){
     e.preventDefault();
     var name = document.getElementById("f-name").value.trim();
@@ -622,9 +712,7 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
     var freq = parseInt(document.getElementById("f-freq").value, 10);
     var last = document.getElementById("f-date").value;
     if(!name || !last || !freq) return;
-    secrets.push({id:"s" + Date.now(), name:name, service:service, freq:freq, last:last});
-    save(secrets);
-    render();
+    addSecret({name:name, service:service, freq:freq, last:last});
     e.target.reset();
     document.getElementById("f-freq").value = 90;
   });
@@ -708,8 +796,123 @@ y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
     });
   });
 
+  // ---- auth (Supabase magic-link) ----
+  function openAuth(){
+    document.getElementById("authBackdrop").classList.add("open");
+    document.getElementById("authStatus").textContent = "";
+  }
+  function closeAuth(){
+    document.getElementById("authBackdrop").classList.remove("open");
+  }
+
+  document.getElementById("authClose").addEventListener("click", closeAuth);
+  document.getElementById("authBackdrop").addEventListener("click", function(e){
+    if(e.target === document.getElementById("authBackdrop")) closeAuth();
+  });
+
+  // navAuthArea's content is re-rendered (button ↔ user badge), so we
+  // delegate the click on the stable parent rather than the button itself.
+  document.getElementById("navAuthArea").addEventListener("click", function(e){
+    if(e.target && e.target.id === "navAuthBtn"){
+      openAuth();
+    } else if(e.target && e.target.id === "signOutBtn"){
+      signOut();
+    }
+  });
+
+  document.getElementById("authForm").addEventListener("submit", function(e){
+    e.preventDefault();
+    var statusEl = document.getElementById("authStatus");
+    if(!sbClient){
+      statusEl.textContent = "Connexion indisponible pour le moment.";
+      return;
+    }
+    var email = document.getElementById("authEmail").value.trim();
+    if(!email) return;
+    statusEl.textContent = "Envoi du lien…";
+    sbClient.auth.signInWithOtp({
+      email: email,
+      options: { emailRedirectTo: window.location.origin + window.location.pathname }
+    }).then(function(res){
+      if(res.error){
+        statusEl.textContent = "Erreur : " + res.error.message;
+        return;
+      }
+      statusEl.textContent = "Lien envoyé à " + email + " — vérifie ta boîte mail.";
+    });
+  });
+
+  function signOut(){
+    if(!sbClient) return;
+    sbClient.auth.signOut().then(function(){
+      onAuthChange(null);
+    });
+  }
+
+  function renderAuthUI(user){
+    var area = document.getElementById("navAuthArea");
+    if(user){
+      area.innerHTML =
+        '<div class="user-badge"><span class="mono">' + escapeHtml(user.email) + '</span>' +
+        '<button class="btn" id="signOutBtn" type="button">Se déconnecter</button></div>';
+    } else {
+      area.innerHTML = '<button class="btn primary" id="navAuthBtn" type="button">Se connecter</button>';
+    }
+  }
+
+  function loadPlan(userId){
+    if(!sbClient) return;
+    sbClient.from("subscriptions").select("plan,status").eq("user_id", userId).maybeSingle().then(function(res){
+      var badge = document.getElementById("planBadge");
+      if(res.error || !res.data){
+        badge.style.display = "none";
+        return;
+      }
+      badge.textContent = res.data.plan + (res.data.status !== "active" ? " · " + res.data.status : "");
+      badge.style.display = "inline-flex";
+    });
+  }
+
+  function loadSecretsFromSupabase(userId){
+    if(!sbClient) return;
+    sbClient.from("secrets").select("*").eq("user_id", userId).order("created_at", {ascending:true}).then(function(res){
+      if(res.error){ console.error(res.error); secrets = []; render(); return; }
+      secrets = (res.data || []).map(rowToSecret);
+      render();
+    });
+  }
+
+  function onAuthChange(user){
+    currentUser = user;
+    renderAuthUI(user);
+    var modeFlag = document.getElementById("modeFlag");
+    if(user){
+      modeFlag.textContent = "● connecté — tes secrets sont sauvegardés sur ton compte";
+      loadPlan(user.id);
+      loadSecretsFromSupabase(user.id);
+      closeAuth();
+    } else {
+      document.getElementById("planBadge").style.display = "none";
+      modeFlag.textContent = "● mode démo — connecte-toi pour sauvegarder pour de vrai";
+      secrets = loadLocal();
+      render();
+    }
+  }
+
   document.getElementById("f-date").value = daysAgo(0);
-  render();
+
+  if(sbClient){
+    sbClient.auth.getSession().then(function(res){
+      var user = (res.data && res.data.session) ? res.data.session.user : null;
+      onAuthChange(user);
+    });
+    sbClient.auth.onAuthStateChange(function(event, session){
+      onAuthChange(session ? session.user : null);
+    });
+  } else {
+    secrets = loadLocal();
+    render();
+  }
 
   // ---- entrance animations on scroll ----
   var revealEls = document.querySelectorAll(".reveal");
