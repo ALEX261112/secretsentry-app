@@ -10,11 +10,137 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
+const Stripe = require("stripe");
+const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 const PORT = process.env.PORT || 8787;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*";
+
+// ---- Stripe (paiements) et Supabase (base de données, clé service_role) ----
+// Ces trois variables sont ajoutées manuellement dans les variables
+// d'environnement Render — jamais tapées ni vues ici dans le code.
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
+const supabaseAdmin =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      })
+    : null;
+
+// Correspondance entre le montant payé (en centimes) et le plan vendu sur le
+// site. Les liens de paiement Stripe sont fixes (Pro 12€, Team 39€) donc ce
+// mapping simple suffit tant qu'on n'a pas plusieurs devises/cycles actifs.
+function planFromAmount(amountCents) {
+  if (amountCents >= 3900) return "team";
+  if (amountCents >= 1200) return "pro";
+  return null;
+}
+
+// Cherche l'utilisateur Supabase (auth.users) dont l'e-mail correspond à
+// celui utilisé au moment du paiement Stripe, pour relier le paiement au
+// bon compte. Fonctionne tant que la base d'utilisateurs reste petite ;
+// à revoir avec une table de correspondance si le volume grossit.
+async function findUserIdByEmail(email) {
+  if (!supabaseAdmin || !email) return null;
+  const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+  if (error) {
+    console.error("Erreur recherche utilisateur Supabase :", error.message);
+    return null;
+  }
+  const match = (data.users || []).find(
+    (u) => (u.email || "").toLowerCase() === email.toLowerCase()
+  );
+  return match ? match.id : null;
+}
+
+async function upsertSubscriptionFromCheckout(session) {
+  const email = session.customer_details && session.customer_details.email;
+  const plan = planFromAmount(session.amount_total || 0);
+  if (!plan) {
+    console.warn("Webhook Stripe : montant non reconnu, plan ignoré.", session.amount_total);
+    return;
+  }
+  const userId = await findUserIdByEmail(email);
+  if (!userId) {
+    console.warn("Webhook Stripe : aucun compte SecretSentry trouvé pour", email);
+    return;
+  }
+  const { error } = await supabaseAdmin.from("subscriptions").upsert(
+    {
+      user_id: userId,
+      plan,
+      status: "active",
+      stripe_customer_id: session.customer || null,
+      stripe_subscription_id: session.subscription || null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" }
+  );
+  if (error) console.error("Erreur mise à jour subscriptions (checkout) :", error.message);
+}
+
+// Statuts Stripe -> statuts internes utilisés dans subscriptions.status.
+function mapStripeStatus(stripeStatus) {
+  if (stripeStatus === "active" || stripeStatus === "trialing") return "active";
+  if (stripeStatus === "past_due") return "past_due";
+  return "canceled";
+}
+
+async function upsertSubscriptionFromStripeSub(sub) {
+  if (!supabaseAdmin) return;
+  const status = mapStripeStatus(sub.status);
+  const periodEnd = sub.current_period_end
+    ? new Date(sub.current_period_end * 1000).toISOString()
+    : null;
+  const { error } = await supabaseAdmin
+    .from("subscriptions")
+    .update({ status, current_period_end: periodEnd, updated_at: new Date().toISOString() })
+    .eq("stripe_customer_id", sub.customer);
+  if (error) console.error("Erreur mise à jour subscriptions (subscription) :", error.message);
+}
+
+async function handleStripeEvent(event) {
+  if (!supabaseAdmin) return;
+  switch (event.type) {
+    case "checkout.session.completed":
+      await upsertSubscriptionFromCheckout(event.data.object);
+      break;
+    case "customer.subscription.updated":
+    case "customer.subscription.deleted":
+      await upsertSubscriptionFromStripeSub(event.data.object);
+      break;
+    default:
+      break; // autres événements Stripe ignorés pour l'instant
+  }
+}
+
+// IMPORTANT : cette route doit lire le corps brut (raw) pour vérifier la
+// signature Stripe — elle est donc déclarée AVANT express.json() global,
+// qui sinon transformerait le corps et invaliderait la vérification.
+app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), (req, res) => {
+  if (!stripe || !STRIPE_WEBHOOK_SECRET) {
+    return res.status(503).json({ error: "stripe_not_configured" });
+  }
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error("Signature webhook Stripe invalide :", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+  // Répond tout de suite à Stripe ; le traitement se fait juste après.
+  res.json({ received: true });
+  handleStripeEvent(event).catch((err) => {
+    console.error("Erreur traitement webhook Stripe :", err);
+  });
+});
 
 app.use(express.json({ limit: "16kb" }));
 app.use(cors({ origin: ALLOWED_ORIGIN }));
@@ -105,7 +231,12 @@ async function searchGitHubCode(secretName) {
 }
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, github_token_configured: Boolean(GITHUB_TOKEN) });
+  res.json({
+    ok: true,
+    github_token_configured: Boolean(GITHUB_TOKEN),
+    stripe_configured: Boolean(stripe && STRIPE_WEBHOOK_SECRET),
+    supabase_configured: Boolean(supabaseAdmin),
+  });
 });
 
 // POST /api/scan  body: { secrets: [{ name, service }] }
